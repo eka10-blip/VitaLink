@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert as NativeAlert, Pressable, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert as NativeAlert, Linking, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { Dashboard, Role, Alert as CareAlert, Metric } from './src/models';
 import { demoRepository } from './src/demoRepository';
 import { fetchLiveRole, hasLiveUrl, liveRepository } from './src/liveRepository';
@@ -8,6 +8,22 @@ import { colors } from './src/theme';
 
 const repository = hasLiveUrl ? liveRepository : demoRepository;
 const isDemo = repository.mode === 'demo';
+// Managed Chert FaceTime line confirmed by the team. Keep the country code for iOS.
+// The agent/Chert bridge must be online before the call can reach the AI.
+const CHERT_FACETIME_NUMBER = '+12064655399';
+const CHERT_DISPLAY_NUMBER = '(206) 465-5399';
+async function callVitaLinkAI() {
+  if (Platform.OS !== 'ios' || Platform.isPad) {
+    NativeAlert.alert('iPhone required', 'VitaLink AI FaceTime calls are available on iPhone only.');
+    return;
+  }
+  try {
+    // Opens Apple's FaceTime app; it does not place an in-app LiveKit call.
+    await Linking.openURL(`facetime://${CHERT_FACETIME_NUMBER}`);
+  } catch {
+    NativeAlert.alert('Unable to open FaceTime', `Check that FaceTime is available on your iPhone. You can also try calling ${CHERT_DISPLAY_NUMBER} in FaceTime.`);
+  }
+}
 const formatDate = (iso: string | null) => iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Not available';
 const metricText = (metric: Metric) => metric.value == null || metric.quality === 'unavailable' ? '—' : String(metric.value);
 const tabsPatient = ['Home', 'Check-in', 'Reports'] as const;
@@ -33,7 +49,7 @@ function MeasurementSummary({ data }: { data: Dashboard }) {
     <Text style={styles.microcopy}>Camera estimates may be unavailable or inaccurate. These values are not a diagnosis or emergency monitoring service.</Text>
   </>;
 }
-function PatientHome({ data, onCheckIn }: { data: Dashboard; onCheckIn: () => void }) {
+function PatientHome({ data, onCheckIn, onCallAI }: { data: Dashboard; onCheckIn: () => void; onCallAI: () => void }) {
   const activeAlerts = data.alerts.filter(a => !a.acknowledged);
   return <>
     <View style={styles.welcome}><Text style={styles.greeting}>Good to see you,</Text><Text style={styles.name}>{data.patientName.split(' ')[0]} <Text style={{ color: colors.green }}>✳</Text></Text><Text style={styles.subtitle}>A little check-in can go a long way.</Text></View>
@@ -43,17 +59,24 @@ function PatientHome({ data, onCheckIn }: { data: Dashboard; onCheckIn: () => vo
       <Text style={styles.heroSub}>Check in at your pace and share an update with your care team.</Text>
       <Action label={isDemo ? 'Try a demo check-in  →' : 'Start check-in  →'} onPress={onCheckIn} />
     </Panel>
+    <Panel style={{ backgroundColor: '#EAF3FF', borderColor: '#DCE9F9' }}>
+      <Pill text="VIDEO CALL" tone="blue" />
+      <Text style={styles.cardTitle}>Talk with your AI companion</Text>
+      <Text style={styles.body}>Open FaceTime to speak with the VitaLink AI caregiver. Your care team must have the Chert agent running.</Text>
+      <Action label="Call VitaLink AI on FaceTime  →" onPress={onCallAI} />
+      <Text style={styles.microcopy}>FaceTime number: {CHERT_DISPLAY_NUMBER}. The call opens outside VitaLink.</Text>
+    </Panel>
     <MeasurementSummary data={data} />
     <SectionHeader title="Your care connection" />
     <Panel><EventRow title={data.caregiverName} sub="Linked family caregiver" right={data.linked ? 'Connected' : 'Unlinked'} /><View style={{ height: 1, backgroundColor: colors.border, marginVertical: 12 }}/><EventRow title="Latest update" sub={formatDate(data.lastUpdated)} right="Shared" />{activeAlerts.length > 0 ? <Text style={styles.warningText}>{activeAlerts.length} check-in alert(s) need follow-up.</Text> : null}</Panel>
     <Text style={styles.notice}>Prototype only. Not for diagnosis or emergency response. If you believe you are experiencing an emergency, contact local emergency services.</Text>
   </>;
 }
-function PatientCheckIn({ data, onCheckIn, onSimulate, busy }: { data: Dashboard; onCheckIn: () => void; onSimulate: () => void; busy: boolean }) {
+function PatientCheckIn({ data, onCheckIn, onSimulate, onCallAI, busy }: { data: Dashboard; onCheckIn: () => void; onSimulate: () => void; onCallAI: () => void; busy: boolean }) {
   return <>
     <Text style={styles.screenTitle}>Daily check-in</Text><Text style={styles.screenSub}>A simple process, with you in control.</Text>
     <Panel><Pill text="STEP 1" /><Text style={styles.cardTitle}>Camera measurements</Text><Text style={styles.body}>Your teammate's Presage + LiveKit system will provide heart and breathing estimates. The interface displays only returned measurements and their status.</Text><View style={styles.statLine}><Text style={styles.statLabel}>Heart rate</Text><Text style={styles.statValue}>{metricText(data.pulse)} bpm</Text></View><View style={styles.statLine}><Text style={styles.statLabel}>Breathing rate</Text><Text style={styles.statValue}>{metricText(data.breathing)} /min</Text></View></Panel>
-    <Panel><Pill text="STEP 2" tone="blue" /><Text style={styles.cardTitle}>Voice conversation</Text><Text style={styles.body}>The Chert + ElevenLabs assistant will ask how you're doing. Person 1 provides the audio session and transcript; this app shows the check-in result once saved.</Text><Text style={styles.microcopy}>Voice session integration: teammate-owned, not included in this frontend package.</Text></Panel>
+    <Panel><Pill text="STEP 2" tone="blue" /><Text style={styles.cardTitle}>FaceTime conversation</Text><Text style={styles.body}>Call the Chert AI caregiver using Apple's FaceTime app. When the agent is running, it can respond through the FaceTime bridge. Calls and transcripts are managed by the teammate's backend, not this screen.</Text><Action label="Call VitaLink AI on FaceTime  →" onPress={onCallAI} /><Text style={styles.microcopy}>Calls {CHERT_DISPLAY_NUMBER} through FaceTime. This button does not itself record a check-in or generate a report.</Text></Panel>
     <Panel><Pill text="STEP 3" /><Text style={styles.cardTitle}>Shared update</Text><Text style={styles.body}>Gemini + Supabase will generate the patient-friendly and caregiver summaries. Both appear in their respective Reports tabs.</Text><Action label={busy ? 'Saving…' : isDemo ? 'Complete sample check-in' : 'Request live check-in'} disabled={busy} onPress={onCheckIn} /></Panel>
     {isDemo ? <Panel style={{ borderColor: '#F9D8CF' }}><Text style={styles.cardTitle}>Emergency-flow demonstration</Text><Text style={styles.body}>Trigger an explicitly simulated nonresponse event to show how it appears on the family dashboard.</Text><Action label="Simulate no-response alert" danger disabled={busy} onPress={onSimulate} /></Panel> : null}
   </>;
@@ -87,7 +110,7 @@ function CaregiverAlerts({ data, onAcknowledge, busy }: { data: Dashboard; onAck
   </>;
 }
 
-export default function App() {
+function VitaLinkApp() {
   const [role, setRole] = useState<Role>('patient');
   const [roleReady, setRoleReady] = useState(isDemo);
   const [patientTab, setPatientTab] = useState<PatientTab>('Home');
@@ -134,8 +157,8 @@ export default function App() {
     {isDemo ? <View style={styles.roleSwitch}><Pressable accessibilityRole="button" accessibilityLabel="Open patient view" onPress={() => setRole('patient')} style={[styles.roleButton, role === 'patient' && styles.roleActive]}><Text style={[styles.roleText, role === 'patient' && styles.roleTextActive]}>Patient view</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Open caregiver view" onPress={() => setRole('caregiver')} style={[styles.roleButton, role === 'caregiver' && styles.roleActive]}><Text style={[styles.roleText, role === 'caregiver' && styles.roleTextActive]}>Family dashboard</Text></Pressable></View> : null}
     {error ? <View style={styles.error}><Text style={{ color: colors.red, fontWeight: '800' }}>Connection unavailable</Text><Text style={{ color: colors.ink, marginVertical: 7 }}>{error}</Text><Action label="Try again" onPress={refresh} secondary /></View> : null}
     {loading && !data ? <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color={colors.green} size="large" /><Text style={{ marginTop: 12, color: colors.muted }}>Loading your dashboard…</Text></View> : data ? <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-      {role === 'patient' && patientTab === 'Home' ? <PatientHome data={data} onCheckIn={() => setPatientTab('Check-in')} /> : null}
-      {role === 'patient' && patientTab === 'Check-in' ? <PatientCheckIn data={data} onCheckIn={start} onSimulate={simulate} busy={busy} /> : null}
+      {role === 'patient' && patientTab === 'Home' ? <PatientHome data={data} onCheckIn={() => setPatientTab('Check-in')} onCallAI={callVitaLinkAI} /> : null}
+      {role === 'patient' && patientTab === 'Check-in' ? <PatientCheckIn data={data} onCheckIn={start} onSimulate={simulate} onCallAI={callVitaLinkAI} busy={busy} /> : null}
       {role === 'patient' && patientTab === 'Reports' ? <ReportScreen data={data} role={role} /> : null}
       {role === 'caregiver' && caregiverTab === 'Overview' ? <CaregiverHome data={data} onAlerts={() => setCaregiverTab('Alerts')} /> : null}
       {role === 'caregiver' && caregiverTab === 'Alerts' ? <CaregiverAlerts data={data} onAcknowledge={(id) => perform(() => repository.acknowledgeAlert(id), 'Alert marked as reviewed.')} busy={busy} /> : null}
@@ -185,3 +208,17 @@ const styles = StyleSheet.create({
   navIcon: { fontSize: 25, lineHeight: 28, color: '#8DA19A' },
   navLabel: { color: colors.muted, fontWeight: '600', fontSize: 11, marginTop: 2 },
 });
+
+// VitaLink is intentionally available on iPhone only.
+// Expo's `platforms` setting controls supported builds; this is a runtime safeguard.
+export default function App() {
+  if (Platform.OS !== 'ios' || Platform.isPad) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', padding: 24 }}>
+        <Text style={{ fontSize: 24, fontWeight: '800', color: colors.ink, marginBottom: 12 }}>VitaLink for iPhone</Text>
+        <Text style={{ fontSize: 15, lineHeight: 23, color: colors.muted }}>This version of VitaLink is available on iPhone only.</Text>
+      </SafeAreaView>
+    );
+  }
+  return <VitaLinkApp />;
+}

@@ -1,0 +1,12 @@
+[project]
+name = "vitalink-agent"
+version = "0.1.0"
+description = "VitaLink FaceTime to LiveKit connection probe"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "livekit-agents[google,elevenlabs,silero]==1.8.12",
+  "python-dotenv>=1,<2",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "VitaLink",
+    "slug": "vitalink-person4",
+    "scheme": "vitalink",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true },
+    "android": { "edgeToEdgeEnabled": true, "adaptiveIcon": { "backgroundColor": "#F5F8F7" } },
+    "experiments": { "tsconfigPaths": true }
+  }
+}

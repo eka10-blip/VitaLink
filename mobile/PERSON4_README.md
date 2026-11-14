@@ -1,10 +1,10 @@
 # VitaLink — Person 4 (Mobile patient app + family dashboard)
 
-This is an **independent React Native / Expo TypeScript source project** built for Person 4's responsibilities. It intentionally does **not** implement Person 1's Chert/ElevenLabs conversation engine, Person 2's Presage/LiveKit sensing, or Person 3's Gemini/Supabase pipeline. It shows their outputs through a consistent data contract.
+This is an **iPhone-only React Native / Expo TypeScript source project** built for Person 4's responsibilities. It intentionally does **not** implement Person 1's Chert/ElevenLabs conversation engine, Person 2's Presage/LiveKit sensing, or Person 3's Gemini/Supabase pipeline. It shows their outputs through a consistent data contract.
 
 ## Delivered
 
-- Patient home screen with daily check-in entry point, latest metrics, caregiver status
+- Patient home screen with FaceTime AI call button, daily check-in entry point, latest metrics, caregiver status
 - Patient check-in flow explaining sensing → conversation → reports
 - Patient and caregiver report screens with recent check-in history
 - Family dashboard with linked patient, measurements, activity history, alert counts
@@ -16,7 +16,7 @@ This is an **independent React Native / Expo TypeScript source project** built f
 
 All demo patients, measurements, alerts and reports are synthetic. No real fall, diagnosis, or medical device reliability is claimed.
 
-## Run it on your Mac (Expo)
+## Run it on an iPhone (Expo)
 
 1. Install Node.js 22+ if needed (Expo 57 requires a recent Node 22 version).
 2. Extract this folder and open a Terminal **inside `VitaLink-Person4-Mobile`**.
@@ -28,11 +28,29 @@ npx expo install --fix
 npx expo start
 ```
 
-4. Install **Expo Go** on your phone, then scan Expo's QR code. Your Mac and phone should be on the same network. You can also run iOS Simulator if Xcode is set up.
+4. Install **Expo Go** on your **iPhone**, then scan Expo's QR code. Your Mac and iPhone should be on the same network. You can also use an **iPhone** simulator if Xcode is set up. Android, web, and iPad are not supported targets.
 
 Expo SDK 57 / React Native 0.86 are targeted for compatibility with Expo Go. If using a newer Expo template, copy `App.tsx` and `src/` into that template and use its installed dependency versions.
 
-**Instant preview:** Double-click `preview/preview.html`. It's a separate lightweight browser-only clickable mockup, useful for validating the screen layout before installing Expo. The actual mobile app lives in `App.tsx`.
+**Design preview only:** `preview/preview.html` is a standalone HTML mockup and is **not** a web version of the app. The actual iPhone app lives in `App.tsx`.
+
+## iPhone-only configuration and Chert FaceTime calling
+
+- `app.json` declares `platforms: ["ios"]` and `ios.supportsTablet: false`. The app also guards against non-iPhone devices at runtime.
+- `package.json` exposes only iOS and general development scripts; Android and web are not supported targets.
+- The **Call VitaLink AI on FaceTime** buttons on Patient Home and Check-in use React Native `Linking.openURL('facetime://+12064655399')` to open **Apple FaceTime**, addressed to the team's Chert line **(206) 465-5399**.
+- **The call is not embedded in VitaLink.** The FaceTime app handles the call and its user confirmation; the Chert agent and bridge must be online and the number must be FaceTime-reachable.
+- This does not establish a backend session or report automatically. Existing check-in and dashboard demo functions remain separate; live transcript/report integration is still pending.
+- If the Chert-assigned line changes, update `CHERT_FACETIME_NUMBER` and `CHERT_DISPLAY_NUMBER` at the top of `App.tsx`. Never commit provider API keys or secrets.
+- **Not yet verified on a physical iPhone:** the app's FaceTime launch, the assigned line's reachability, and the AI conversation all require an end-to-end test.
+
+### Test the FaceTime button on an iPhone
+
+1. Ask the Chert teammate to start the agent worker and managed Chert FaceTime bridge, then confirm that **(206) 465-5399** is the current assigned line.
+2. Open VitaLink using Expo Go on an iPhone, go to **Patient view → Home**, and tap **Call VitaLink AI on FaceTime**.
+3. Confirm that Apple's FaceTime app opens with the intended number. Start the call only when the agent is ready.
+4. Verify audio/video and agent responses with your teammate. If the line cannot be reached, confirm it is FaceTime-enabled and that the Chert bridge is running.
+5. Return to VitaLink. The app does not automatically mark a check-in complete or create a report.
 
 ## Test the complete demo workflow
 

@@ -30,6 +30,18 @@ export async function startSensingSession(input: {
   assertPresageLiveConfigured();
 
   const patientId = input.patientId.trim() || 'patient';
+
+  // One active sensing pipeline at a time — avoids OOM from stacked Presage sessions.
+  for (const [id, prior] of activeControllers) {
+    prior.abort();
+    activeControllers.delete(id);
+    try {
+      setStatus(id, 'cancelled');
+    } catch {
+      /* ignore */
+    }
+  }
+
   const session = createSession(patientId, 'pending-room');
   const roomName = input.roomName?.trim() || `vitalink-${patientId}-${session.id.slice(0, 8)}`;
   updateSession(session.id, { roomName });
@@ -229,24 +241,22 @@ async function runLiveKitPipeline(
     const elapsed = pipeline?.elapsedSeconds() ?? 0;
     const hasPulse = next.pulse.value != null;
     const hasBreathing = next.breathing.value != null;
-    // Breathing window is longer (~30s). Prefer both; allow complete after min seconds once both exist.
-    const ready = hasPulse && hasBreathing && elapsed >= Math.min(30, appConfig.minMeasurementSeconds);
+    const bothReady = hasPulse && hasBreathing && elapsed >= 25;
+    const pulseOnlyFallback = hasPulse && !hasBreathing && elapsed >= 50;
 
-    if (ready && next.status !== 'completed') {
+    if ((bothReady || pulseOnlyFallback) && next.status !== 'completed') {
       const completed = updateSession(sessionId, {
         status: 'completed',
-        validationHint: 'Measurement complete — pulse and breathing ready.',
+        validationHint: bothReady
+          ? 'Measurement complete — pulse and breathing ready.'
+          : 'Pulse captured. Breathing still limited — try again with chest/face steadier if needed.',
       });
       void forwardToPerson3(completed);
       controller.abort();
     }
   };
 
-  // Phase 3+: start SmartSpectra only in live mode (requires SMARTSPECTRA_API_KEY).
-  if (appConfig.presageMode === 'live') {
-    pipeline = new SmartSpectraPipeline(onMetrics);
-    await pipeline.start();
-  }
+  // SmartSpectra starts when video arrives (below) — not before, or idle gaps kill the session.
 
   sessionLog(sessionId, 'worker connecting to LiveKit room', {
     roomName,
@@ -284,22 +294,34 @@ async function runLiveKitPipeline(
     if (track.kind !== TrackKind.KIND_VIDEO) return;
     if (videoTask) return;
 
-    updateSession(sessionId, {
-      videoTrackSubscribed: true,
-      status: 'measuring',
-      validationHint:
-        appConfig.presageMode === 'mock'
-          ? 'Video track subscribed (Presage still mock — counting frames only).'
-          : 'Video track subscribed; measuring…',
-    });
-    sessionLog(sessionId, 'video track SUBSCRIBED', {
-      roomName,
-      fromIdentity: fromIdentity ?? 'unknown',
-      videoTrackSubscribed: true,
-    });
+    videoTask = (async () => {
+      updateSession(sessionId, {
+        videoTrackSubscribed: true,
+        status: 'measuring',
+        validationHint:
+          appConfig.presageMode === 'mock'
+            ? 'Video track subscribed (Presage still mock — counting frames only).'
+            : 'Camera connected — starting Presage measurement…',
+      });
+      sessionLog(sessionId, 'video track SUBSCRIBED', {
+        roomName,
+        fromIdentity: fromIdentity ?? 'unknown',
+        videoTrackSubscribed: true,
+      });
 
-    videoStream = new VideoStream(track as never);
-    videoTask = consumeVideo(sessionId, videoStream, pipeline, signal, VideoBufferType);
+      if (appConfig.presageMode === 'live') {
+        pipeline = new SmartSpectraPipeline(onMetrics);
+        await pipeline.start();
+      }
+
+      videoStream = new VideoStream(track as never);
+      await consumeVideo(sessionId, videoStream, pipeline, signal, VideoBufferType, controller);
+    })().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[livekit session=${sessionId}] attachVideo failed:`, message);
+      setStatus(sessionId, 'failed', message);
+      controller.abort();
+    });
   };
 
   room.on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
@@ -329,8 +351,8 @@ async function runLiveKitPipeline(
     }
   }
 
-  // Soft deadline: breathing often needs ~30–45s. Wait longer before giving up.
-  const softDeadlineMs = Math.max(appConfig.minMeasurementSeconds + 25, 55) * 1000;
+  // Overall safety net (video + Presage). Prefer completion via metrics callback.
+  const softDeadlineMs = Math.max(appConfig.minMeasurementSeconds + 30, 65) * 1000;
   const deadlineTimer = setTimeout(() => {
     const current = getSession(sessionId);
     if (!current || current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
@@ -368,16 +390,22 @@ async function consumeVideo(
   pipeline: SmartSpectraPipeline | null,
   signal: AbortSignal,
   VideoBufferType: { RGB24: number },
+  controller: AbortController,
 ): Promise<void> {
-  let syntheticTs = 0;
-  const frameIntervalUs = 33_333;
   let lastLoggedFrames = 0;
+  let frameIndex = 0;
 
   try {
     for await (const event of stream) {
       if (signal.aborted) break;
       const session = getSession(sessionId);
       if (!session || session.status === 'cancelled' || session.status === 'completed') break;
+
+      // Yield occasionally so Express can serve polls — never skip frames.
+      frameIndex += 1;
+      if (frameIndex % 20 === 0) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
 
       let frame = event.frame as {
         type: number;
@@ -396,12 +424,6 @@ async function consumeVideo(
         frame = frame.convert(VideoBufferType.RGB24) as typeof frame;
       }
 
-      const rawTs = event.timestampUs;
-      const eventTs =
-        typeof rawTs === 'bigint' ? Number(rawTs) : typeof rawTs === 'number' ? rawTs : null;
-      syntheticTs += frameIntervalUs;
-      const timestampUs = eventTs && eventTs > 0 ? eventTs : syntheticTs;
-
       if (appConfig.presageMode === 'mock') {
         const accepted = session.framesAccepted + 1;
         updateSession(sessionId, {
@@ -419,15 +441,13 @@ async function consumeVideo(
         }
         lastLoggedFrames = accepted;
         if (accepted >= 90) {
-          sessionLog(sessionId, 'mock frame quota reached; completing without vitals', {
-            framesAccepted: accepted,
-          });
           const completed = updateSession(sessionId, {
             status: 'completed',
             pulse: readingFromSample('bpm', null, 0, new Date().toISOString()),
             breathing: readingFromSample('breaths/min', null, 0, new Date().toISOString()),
           });
           void forwardToPerson3(completed);
+          controller.abort();
           break;
         }
         continue;
@@ -436,19 +456,30 @@ async function consumeVideo(
       if (!pipeline) continue;
       if (pipeline.isFatal()) {
         setStatus(sessionId, 'failed', pipeline.getFatalMessage() || 'Presage pipeline failed');
+        controller.abort();
+        break;
+      }
+
+      await pipeline.maybeRestart();
+      if (pipeline.isFatal()) {
+        setStatus(sessionId, 'failed', pipeline.getFatalMessage() || 'Presage pipeline failed');
+        controller.abort();
         break;
       }
 
       let accepted = false;
       try {
-        accepted = pipeline.sendRgbFrame(frame.data, frame.width, frame.height, timestampUs);
+        accepted = pipeline.sendRgbFrame(frame.data, frame.width, frame.height);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setStatus(sessionId, 'failed', `Presage sendFrame failed: ${message}`);
+        controller.abort();
         break;
       }
+      await pipeline.maybeRestart();
       if (pipeline.isFatal()) {
         setStatus(sessionId, 'failed', pipeline.getFatalMessage() || 'Presage pipeline failed');
+        controller.abort();
         break;
       }
 
@@ -473,8 +504,9 @@ async function consumeVideo(
       try {
         setStatus(sessionId, 'failed', message);
       } catch {
-        /* session may already be gone */
+        /* ignore */
       }
+      controller.abort();
     }
   }
 }

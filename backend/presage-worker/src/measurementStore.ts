@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appConfig } from './config.js';
 import {
@@ -19,14 +19,19 @@ const storePath =
 function persistNow(): void {
   try {
     mkdirSync(dirname(storePath), { recursive: true });
-    writeFileSync(storePath, JSON.stringify([...sessions.values()], null, 0), 'utf8');
+    const tmp = `${storePath}.tmp`;
+    // Cap stored history so restarts stay cheap.
+    const values = [...sessions.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 20);
+    writeFileSync(tmp, JSON.stringify(values), 'utf8');
+    renameSync(tmp, storePath);
     persistDirty = false;
   } catch (err) {
     console.warn('[sessions] persist failed:', err instanceof Error ? err.message : err);
   }
 }
 
-/** Debounce disk writes — per-frame sync was hammering the cloud disk. */
 function persist(force = false): void {
   persistDirty = true;
   if (force) {
@@ -41,13 +46,14 @@ function persist(force = false): void {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     if (persistDirty) persistNow();
-  }, 1000);
+  }, 1500);
 }
 
 function restore(): void {
   try {
     if (!existsSync(storePath)) return;
-    const raw = readFileSync(storePath, 'utf8');
+    const raw = readFileSync(storePath, 'utf8').trim();
+    if (!raw) return;
     const list = JSON.parse(raw) as SensingSession[];
     if (!Array.isArray(list)) return;
     for (const session of list) {
@@ -115,7 +121,6 @@ export function setStatus(id: string, status: SessionStatus, error: string | nul
   return updateSession(id, { status, error });
 }
 
-/** Latest completed (or in-progress) measurement for a patient — Person 4 dashboard shape helpers. */
 export function latestForPatient(patientId: string): SensingSession | undefined {
   return listSessions().find((s) => s.patientId === patientId);
 }

@@ -24,6 +24,9 @@ COPY src ./src
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV SESSION_STORE_PATH=/tmp/vitalink-presage-sessions.json
+# Keep SmartSpectra + LiveKit under Railway memory limits.
+ENV NODE_OPTIONS=--max-old-space-size=768
+ENV MIN_MEASUREMENT_SECONDS=45
 
 EXPOSE 8787
 

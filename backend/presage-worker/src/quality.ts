@@ -1,15 +1,14 @@
 import type { MetricQuality, MetricReading } from './types.js';
 
 /**
- * Map SmartSpectra sample confidence into the Person 4 contract quality enum.
- * Confidence often stays 0 until windows fill (pulse ~12s, breathing ~30s).
- * Still surface numeric values as "limited" so the UI can show progress.
+ * SmartSpectra confidence is a percentage [0, 100] (see SDK model cards).
+ * Also accept normalized [0, 1] if a future SDK change returns that.
  */
 export function qualityFromConfidence(confidence: number | null | undefined): MetricQuality {
-  if (confidence == null || Number.isNaN(confidence) || confidence <= 0) {
-    return 'limited';
-  }
-  if (confidence < 0.5) return 'limited';
+  if (confidence == null || Number.isNaN(confidence)) return 'limited';
+  const c = confidence > 1 ? confidence / 100 : confidence;
+  if (c <= 0) return 'limited';
+  if (c < 0.5) return 'limited';
   return 'good';
 }
 

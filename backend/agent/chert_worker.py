@@ -114,8 +114,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     async with aiohttp.ClientSession() as http:
         try:
-            # Probe audio can publish early; paid Gemini/ElevenLabs open only after
-            # chert_bridge_ready (chert guide agent).
+            # Chert contract (guide agent + student-agent example):
+            # 1) wait for caller, 2) publish unmuted agent audio immediately,
+            # 3) greet only after room metadata chert_bridge_ready.
+            # Waiting for bridge_ready before publishing causes a deadlock:
+            # Chert waits for agent audio; conversation previously waited for bridge.
             if mode == 'probe':
                 source = rtc.AudioSource(48000, 1)
                 track = rtc.LocalAudioTrack.create_audio_track('vitalink-probe', source)
@@ -136,11 +139,7 @@ async def entrypoint(ctx: agents.JobContext):
                     for publication in participant.track_publications.values():
                         if publication.track:
                             subscribed(publication.track, publication, participant)
-
-            if not await wait_or_stop(ready):
-                return
-            transcript.mark('active')
-            if mode == 'conversation':
+            else:
                 session = build_session(http)
 
                 @session.on('conversation_item_added')
@@ -169,6 +168,13 @@ async def entrypoint(ctx: agents.JobContext):
                                     room_options=room_io.RoomOptions(
                                         participant_identity=caller_identity,
                                         text_input=False, video_input=False, text_output=False))
+                log.info('Conversation session started; agent audio publishing; waiting for bridge')
+
+            if not await wait_or_stop(ready):
+                return
+            transcript.mark('active')
+            if session:
+                # Audible greeting within 10s of bridge_ready (remote_audio_timeout).
                 session.say('Hi, I am VitaLink, your AI check-in companion. This demo saves '
                             'a conversation transcript. How are you feeling today?')
             else:

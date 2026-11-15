@@ -29,9 +29,12 @@ def INSTRUCTIONS() -> str:
 
 
 def build_session(http: aiohttp.ClientSession) -> AgentSession:
+    # scribe_v1/v2 REST confirmed on this key; pair non-realtime STT with Silero VAD.
+    # scribe_v2_realtime needs a live websocket path and is not required for MVP.
+    stt_model = os.getenv('ELEVEN_STT_MODEL', 'scribe_v2').strip() or 'scribe_v2'
     return AgentSession(
         stt=elevenlabs.STT(api_key=required('ELEVEN_API_KEY'),
-                           model='scribe_v2_realtime', http_session=http),
+                           model=stt_model, http_session=http),
         llm=google.LLM(api_key=required('GOOGLE_API_KEY'),
                        model=os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')),
         tts=elevenlabs.TTS(api_key=required('ELEVEN_API_KEY'),

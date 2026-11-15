@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.vitalink.app",
+      "bundleIdentifier": "com.leelasowjanya.vitalink",
       "infoPlist": {
         "NSCameraUsageDescription": "VitaLink uses the camera so Presage can estimate pulse and breathing during check-in.",
         "NSMicrophoneUsageDescription": "Microphone access is reserved for the voice check-in teammate integration."
@@ -19,10 +19,9 @@
       "adaptiveIcon": {
         "backgroundColor": "#F5F8F7"
       },
-      "package": "com.vitalink.app"
+      "package": "com.leelasowjanya.vitalink"
     },
     "plugins": [
-      "expo-dev-client",
       "@livekit/react-native-expo-plugin",
       "@config-plugins/react-native-webrtc"
     ],

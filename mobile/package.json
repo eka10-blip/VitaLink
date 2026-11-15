@@ -16,7 +16,6 @@
     "@livekit/react-native-expo-plugin": "^1.1.0",
     "@livekit/react-native-webrtc": "144.1.2",
     "expo": "~57.0.33",
-    "expo-dev-client": "~6.0.12",
     "livekit-client": "^2.15.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",

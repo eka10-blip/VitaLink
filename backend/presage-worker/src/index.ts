@@ -21,7 +21,7 @@ app.get('/health', (_req, res) => {
     service: 'vitalink-presage-worker',
     person: 2,
     platformFocus: 'ios',
-    workerRevision: 'cloud-stable-v3',
+    workerRevision: 'cloud-stable-v4',
     // Non-secret mode label (mock|live) — not a credential
     presageMode: appConfig.presageMode,
     nodeVersionSupported: isNodeVersionSupported(),

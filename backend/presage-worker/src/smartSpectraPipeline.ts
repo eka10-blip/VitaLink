@@ -25,6 +25,7 @@ export class SmartSpectraPipeline {
   private startedAtMs = 0;
   private fatal = false;
   private fatalMessage: string | null = null;
+  private metricsEvents = 0;
 
   constructor(private readonly onUpdate: PipelineMetricsHandler) {}
 
@@ -51,26 +52,22 @@ export class SmartSpectraPipeline {
       );
     }
 
-    const {
-      SmartSpectraSDK,
-      PixelFormat,
-      FrameTransform,
-      breathingMetrics,
-      cardioMetrics,
-      decodeMetrics,
-    } = mod;
+    const { SmartSpectraSDK, PixelFormat, FrameTransform, MetricType, decodeMetrics } = mod;
 
     this.pixelFormatRgb = PixelFormat.kRGB;
 
-    // Pulse + breathing only — skip heavier models that may need GPU/Vulkan on cloud hosts.
-    const requestedMetrics = [...breathingMetrics, ...cardioMetrics].filter((name) => {
-      const n = String(name).toLowerCase();
-      return !n.includes('blood') && !n.includes('bp') && !n.includes('phasic');
-    });
+    // CPU-safe subset only. Full cardioMetrics includes ARTERIAL_PRESSURE_TRACE /
+    // phasic-BP which needs Vulkan and was crashing the Railway worker before breathing (~30s) filled.
+    const requestedMetrics = [
+      MetricType.BREATHING_RATE,
+      MetricType.CHEST_BREATHING,
+      MetricType.ABDOMEN_BREATHING,
+      MetricType.PULSE_RATE,
+    ];
 
     const sdk = new SmartSpectraSDK({
       apiKey: appConfig.smartSpectraApiKey,
-      requestedMetrics: requestedMetrics.length > 0 ? requestedMetrics : [...breathingMetrics, ...cardioMetrics],
+      requestedMetrics,
     });
 
     sdk.on('validationStatus', (_code: number, _ts: number, hint: string) => {
@@ -90,9 +87,15 @@ export class SmartSpectraPipeline {
           cardio?: { pulseRate?: Array<{ value: number; confidence?: number }> };
         };
         if (!metrics || Buffer.isBuffer(metrics)) return;
+        this.metricsEvents += 1;
         const now = new Date().toISOString();
         const pulseSample = metrics.cardio?.pulseRate?.at(-1);
         const breathSample = metrics.breathing?.rate?.at(-1);
+        if (this.metricsEvents === 1 || this.metricsEvents % 10 === 0) {
+          console.log(
+            `[smartspectra] metrics event=#${this.metricsEvents} pulse=${pulseSample?.value ?? 'n/a'} breath=${breathSample?.value ?? 'n/a'}`,
+          );
+        }
         this.onUpdate({
           pulse: readingFromSample('bpm', pulseSample?.value, pulseSample?.confidence, now),
           breathing: readingFromSample(
@@ -101,7 +104,10 @@ export class SmartSpectraPipeline {
             breathSample?.confidence,
             now,
           ),
-          validationHint: null,
+          validationHint:
+            breathSample?.value == null
+              ? 'Pulse updating — keep still ~30s more for breathing…'
+              : null,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -129,6 +135,8 @@ export class SmartSpectraPipeline {
     this.lastTimestampUs = 0;
     this.fatal = false;
     this.fatalMessage = null;
+    this.metricsEvents = 0;
+    console.log('[smartspectra] started with BREATHING_RATE + CHEST + ABDOMEN + PULSE_RATE only');
   }
 
   sendRgbFrame(buffer: Uint8Array, width: number, height: number, timestampUs: number): boolean {

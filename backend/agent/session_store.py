@@ -113,10 +113,20 @@ def context_instructions() -> str:
     history = ctx.get('history') or []
     checkins = ctx.get('previous_checkins') or []
     family = ctx.get('family_care_instructions') or ''
+    latest = ctx.get('latest_presage_vitals') or {}
+    vitals_line = ''
+    if isinstance(latest, dict) and (latest.get('hr_bpm') is not None or latest.get('rr_bpm') is not None):
+        vitals_line = (
+            f"Latest wellness camera estimates from the VitaLink app (not a medical device): "
+            f"heart rate ≈ {latest.get('hr_bpm')} bpm, breathing ≈ {latest.get('rr_bpm')} /min "
+            f"(measured_at={latest.get('measured_at')}). You may acknowledge these gently as "
+            f"app estimates only — never diagnose or treat.\n"
+        )
     return (
         f"\nSynthetic patient_id: {ctx.get('patient_id')}.\n"
         f"Known history (demo): {json.dumps(history, ensure_ascii=False)[:800]}\n"
         f"Previous check-ins (demo): {json.dumps(checkins, ensure_ascii=False)[:800]}\n"
         f"Family care instructions (demo): {str(family)[:500]}\n"
+        f"{vitals_line}"
         'Use this only for warm, non-diagnostic check-in conversation.'
     )

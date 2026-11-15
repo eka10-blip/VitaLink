@@ -9,18 +9,39 @@ import {
 } from './types.js';
 
 const sessions = new Map<string, SensingSession>();
+let persistDirty = false;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 const storePath =
   process.env.SESSION_STORE_PATH?.trim() ||
   join(process.env.TMPDIR || '/tmp', 'vitalink-presage-sessions.json');
 
-function persist(): void {
+function persistNow(): void {
   try {
     mkdirSync(dirname(storePath), { recursive: true });
     writeFileSync(storePath, JSON.stringify([...sessions.values()], null, 0), 'utf8');
+    persistDirty = false;
   } catch (err) {
     console.warn('[sessions] persist failed:', err instanceof Error ? err.message : err);
   }
+}
+
+/** Debounce disk writes — per-frame sync was hammering the cloud disk. */
+function persist(force = false): void {
+  persistDirty = true;
+  if (force) {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    persistNow();
+    return;
+  }
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (persistDirty) persistNow();
+  }, 1000);
 }
 
 function restore(): void {
@@ -61,7 +82,7 @@ export function createSession(patientId: string, roomName: string): SensingSessi
     workerIdentity: null,
   };
   sessions.set(session.id, session);
-  persist();
+  persist(true);
   return session;
 }
 
@@ -85,7 +106,8 @@ export function updateSession(
     updatedAt: new Date().toISOString(),
   };
   sessions.set(id, next);
-  persist();
+  const statusChanged = patch.status !== undefined && patch.status !== current.status;
+  persist(statusChanged);
   return next;
 }
 

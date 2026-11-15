@@ -229,16 +229,13 @@ async function runLiveKitPipeline(
     const elapsed = pipeline?.elapsedSeconds() ?? 0;
     const hasPulse = next.pulse.value != null;
     const hasBreathing = next.breathing.value != null;
-    const ready =
-      elapsed >= appConfig.minMeasurementSeconds && (hasPulse || hasBreathing);
+    // Breathing window is longer (~30s). Prefer both; allow complete after min seconds once both exist.
+    const ready = hasPulse && hasBreathing && elapsed >= Math.min(30, appConfig.minMeasurementSeconds);
 
     if (ready && next.status !== 'completed') {
       const completed = updateSession(sessionId, {
         status: 'completed',
-        validationHint:
-          hasPulse && hasBreathing
-            ? 'Measurement complete'
-            : 'Measurement window finished — some vitals may still be limited.',
+        validationHint: 'Measurement complete — pulse and breathing ready.',
       });
       void forwardToPerson3(completed);
       controller.abort();
@@ -332,8 +329,8 @@ async function runLiveKitPipeline(
     }
   }
 
-  // Soft deadline: finish with whatever vitals we have (breathing window ~30s+).
-  const softDeadlineMs = (appConfig.minMeasurementSeconds + 25) * 1000;
+  // Soft deadline: breathing often needs ~30–45s. Wait longer before giving up.
+  const softDeadlineMs = Math.max(appConfig.minMeasurementSeconds + 25, 55) * 1000;
   const deadlineTimer = setTimeout(() => {
     const current = getSession(sessionId);
     if (!current || current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
@@ -342,7 +339,10 @@ async function runLiveKitPipeline(
     if (current.pulse.value != null || current.breathing.value != null) {
       const completed = updateSession(sessionId, {
         status: 'completed',
-        validationHint: 'Measurement window finished.',
+        validationHint:
+          current.breathing.value != null
+            ? 'Measurement window finished.'
+            : 'Pulse captured; breathing still unavailable — keep still longer next time.',
       });
       void forwardToPerson3(completed);
       controller.abort();

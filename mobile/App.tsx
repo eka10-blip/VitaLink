@@ -4,6 +4,7 @@ import { Dashboard, Role, Alert as CareAlert, Metric } from './src/models';
 import { demoRepository } from './src/demoRepository';
 import { fetchLiveRole, hasLiveUrl, liveRepository } from './src/liveRepository';
 import { IosSensingGate } from './src/sensing/IosSensingGate';
+import type { SensingSessionSnapshot } from './src/sensing/types';
 import { Action, Empty, Label, MetricCard, Panel, Pill, SectionHeader } from './src/ui';
 import { colors } from './src/theme';
 
@@ -73,11 +74,25 @@ function PatientHome({ data, onCheckIn, onCallAI }: { data: Dashboard; onCheckIn
     <Text style={styles.notice}>Prototype only. Not for diagnosis or emergency response. If you believe you are experiencing an emergency, contact local emergency services.</Text>
   </>;
 }
-function PatientCheckIn({ data, onCheckIn, onSimulate, onCallAI, busy }: { data: Dashboard; onCheckIn: () => void; onSimulate: () => void; onCallAI: () => void; busy: boolean }) {
+function PatientCheckIn({
+  data,
+  onCheckIn,
+  onSimulate,
+  onCallAI,
+  onSensingComplete,
+  busy,
+}: {
+  data: Dashboard;
+  onCheckIn: () => void;
+  onSimulate: () => void;
+  onCallAI: () => void;
+  onSensingComplete: (snapshot: SensingSessionSnapshot) => void;
+  busy: boolean;
+}) {
   return <>
     <Text style={styles.screenTitle}>Daily check-in</Text><Text style={styles.screenSub}>A simple process, with you in control.</Text>
     <Panel><Pill text="STEP 1" /><Text style={styles.cardTitle}>Camera measurements</Text><Text style={styles.body}>Person 2's Presage + LiveKit worker estimates heart and breathing from the iOS camera stream. Values appear below when the sensing session completes.</Text><View style={styles.statLine}><Text style={styles.statLabel}>Heart rate</Text><Text style={styles.statValue}>{metricText(data.pulse)} bpm</Text></View><View style={styles.statLine}><Text style={styles.statLabel}>Breathing rate</Text><Text style={styles.statValue}>{metricText(data.breathing)} /min</Text></View></Panel>
-    <IosSensingGate patientId={data.patientId} />
+    <IosSensingGate patientId={data.patientId} onComplete={onSensingComplete} />
     <Panel><Pill text="STEP 2" tone="blue" /><Text style={styles.cardTitle}>FaceTime conversation</Text><Text style={styles.body}>Call the Chert AI caregiver using Apple's FaceTime app. When the agent is running, it can respond through the FaceTime bridge. Calls and transcripts are managed by the teammate's backend, not this screen.</Text><Action label="Call VitaLink AI on FaceTime  →" onPress={onCallAI} /><Text style={styles.microcopy}>Calls {CHERT_DISPLAY_NUMBER} through FaceTime. This button does not itself record a check-in or generate a report.</Text></Panel>
     <Panel><Pill text="STEP 3" /><Text style={styles.cardTitle}>Shared update</Text><Text style={styles.body}>Gemini + Supabase will generate the patient-friendly and caregiver summaries. Both appear in their respective Reports tabs.</Text><Action label={busy ? 'Saving…' : isDemo ? 'Complete sample check-in' : 'Request live check-in'} disabled={busy} onPress={onCheckIn} /></Panel>
     {isDemo ? <Panel style={{ borderColor: '#F9D8CF' }}><Text style={styles.cardTitle}>Emergency-flow demonstration</Text><Text style={styles.body}>Trigger an explicitly simulated nonresponse event to show how it appears on the family dashboard.</Text><Action label="Simulate no-response alert" danger disabled={busy} onPress={onSimulate} /></Panel> : null}
@@ -160,7 +175,39 @@ function VitaLinkApp() {
     {error ? <View style={styles.error}><Text style={{ color: colors.red, fontWeight: '800' }}>Connection unavailable</Text><Text style={{ color: colors.ink, marginVertical: 7 }}>{error}</Text><Action label="Try again" onPress={refresh} secondary /></View> : null}
     {loading && !data ? <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color={colors.green} size="large" /><Text style={{ marginTop: 12, color: colors.muted }}>Loading your dashboard…</Text></View> : data ? <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
       {role === 'patient' && patientTab === 'Home' ? <PatientHome data={data} onCheckIn={() => setPatientTab('Check-in')} onCallAI={callVitaLinkAI} /> : null}
-      {role === 'patient' && patientTab === 'Check-in' ? <PatientCheckIn data={data} onCheckIn={start} onSimulate={simulate} onCallAI={callVitaLinkAI} busy={busy} /> : null}
+      {role === 'patient' && patientTab === 'Check-in' ? (
+        <PatientCheckIn
+          data={data}
+          onCheckIn={start}
+          onSimulate={simulate}
+          onCallAI={callVitaLinkAI}
+          onSensingComplete={(snapshot) => {
+            setData((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    pulse: {
+                      value: snapshot.pulse.value,
+                      unit: snapshot.pulse.unit,
+                      source: 'presage',
+                      quality: snapshot.pulse.quality,
+                      measuredAt: snapshot.pulse.measuredAt,
+                    },
+                    breathing: {
+                      value: snapshot.breathing.value,
+                      unit: snapshot.breathing.unit,
+                      source: 'presage',
+                      quality: snapshot.breathing.quality,
+                      measuredAt: snapshot.breathing.measuredAt,
+                    },
+                    lastUpdated: new Date().toISOString(),
+                  }
+                : prev,
+            );
+          }}
+          busy={busy}
+        />
+      ) : null}
       {role === 'patient' && patientTab === 'Reports' ? <ReportScreen data={data} role={role} /> : null}
       {role === 'caregiver' && caregiverTab === 'Overview' ? <CaregiverHome data={data} onAlerts={() => setCaregiverTab('Alerts')} /> : null}
       {role === 'caregiver' && caregiverTab === 'Alerts' ? <CaregiverAlerts data={data} onAcknowledge={(id) => perform(() => repository.acknowledgeAlert(id), 'Alert marked as reviewed.')} busy={busy} /> : null}

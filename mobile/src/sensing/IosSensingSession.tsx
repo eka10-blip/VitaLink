@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 import {
   AudioSession,
   LiveKitRoom,
@@ -8,13 +8,15 @@ import {
   isTrackReference,
   type TrackReferenceOrPlaceholder,
 } from '@livekit/react-native';
+import { mediaDevices, permissions } from '@livekit/react-native-webrtc';
 import { Track } from 'livekit-client';
 import { Action, Panel, Pill } from '../ui';
 import { colors } from '../theme';
 import {
   cancelSensingSession,
+  discoverWorker,
   getSensingSession,
-  hasPresageWorker,
+  getWorkerBaseUrl,
   startSensingSession,
 } from './sensingApi';
 import type { SensingSessionSnapshot, StartSensingResponse } from './types';
@@ -24,25 +26,51 @@ type Props = {
   onComplete?: (snapshot: SensingSessionSnapshot) => void;
 };
 
+async function ensureCameraAccess(): Promise<void> {
+  const status = await permissions.request({ name: 'camera' });
+  if (status === permissions.RESULT.GRANTED || status === true || status === 'granted') {
+    return;
+  }
+  try {
+    const stream = await mediaDevices.getUserMedia({ audio: false, video: true });
+    stream.getTracks().forEach((track) => track.stop());
+  } catch {
+    throw new Error(
+      'Camera permission is required. Enable Camera for VitaLink in Settings → VitaLink, then try again.',
+    );
+  }
+}
+
 function LocalPreview() {
   const tracks = useTracks([Track.Source.Camera]);
-  const local = tracks.find((t: TrackReferenceOrPlaceholder) => isTrackReference(t) && t.participant.isLocal);
+  const local = tracks.find(
+    (t: TrackReferenceOrPlaceholder) => isTrackReference(t) && t.participant.isLocal,
+  );
   if (!local || !isTrackReference(local)) {
-    return <Text style={styles.hint}>Waiting for camera…</Text>;
+    return (
+      <View style={styles.previewPlaceholder}>
+        <Text style={styles.previewPlaceholderText}>Starting front camera…</Text>
+        <Text style={styles.hint}>Center your face in the frame with good lighting.</Text>
+      </View>
+    );
   }
-  return <VideoTrack trackRef={local} style={styles.preview} objectFit="cover" />;
+  return (
+    <View>
+      <VideoTrack trackRef={local} style={styles.preview} objectFit="cover" />
+      <Text style={styles.faceGuide}>Keep your face centered — Presage is scanning</Text>
+    </View>
+  );
 }
 
 /**
- * iOS-only Person 2 sensing panel.
- * Publishes the front camera to LiveKit; worker subscribes (Presage stays mock in Phase 2).
+ * iOS Person 2 sensing: auto-finds worker, requests camera, publishes to LiveKit for Presage.
  */
 export function IosSensingSession({ patientId, onComplete }: Props) {
   const [sessionCreds, setSessionCreds] = useState<StartSensingResponse | null>(null);
   const [snapshot, setSnapshot] = useState<SensingSessionSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [roomConnectHint, setRoomConnectHint] = useState<string | null>(null);
+  const [phase, setPhase] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -54,40 +82,38 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
 
   const start = useCallback(async () => {
     if (Platform.OS !== 'ios') {
-      setError('Camera sensing is implemented for iOS only in this Person 2 delivery.');
+      setError('Camera sensing is iOS-only in this delivery.');
       return;
     }
-    if (!hasPresageWorker) {
-      setError('EXPO_PUBLIC_PRESAGE_WORKER_URL is not set.');
-      return;
-    }
+
     setBusy(true);
     setError(null);
-    setRoomConnectHint(null);
+    setSnapshot(null);
+
     try {
+      setPhase('Finding Presage worker…');
+      const base = await discoverWorker();
+      setPhase(`Worker found. Requesting camera…`);
+      console.log('[sensing] worker', base);
+
+      await ensureCameraAccess();
+      setPhase('Camera allowed. Starting measurement session…');
+
       const started = await startSensingSession(patientId);
       if (!started.livekitUrl || !started.participantToken) {
-        setError('Worker did not return a LiveKit URL/token. Check LIVEKIT_* on the worker.');
-        return;
+        throw new Error('Worker did not return LiveKit credentials. Check LIVEKIT_* in the worker .env.');
       }
-      // Never log the token.
-      console.log('[sensing] session started', {
-        sessionId: started.sessionId,
-        roomName: started.roomName,
-        participantIdentity: started.participantIdentity,
-        livekitUrlPresent: Boolean(started.livekitUrl),
-        tokenLength: started.participantToken.length,
-      });
+
       setSessionCreds(started);
-      setRoomConnectHint('Connecting phone to LiveKit room…');
+      setPhase('Opening camera and connecting to LiveKit…');
+
       stopPolling();
       pollRef.current = setInterval(async () => {
         try {
           const next = await getSensingSession(started.sessionId);
           setSnapshot(next);
-          if (next.error) {
-            setError(next.error);
-          }
+          if (next.error) setError(next.error);
+          if (next.validationHint) setPhase(next.validationHint);
           if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
             stopPolling();
             onComplete?.(next);
@@ -95,9 +121,10 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to poll sensing session');
         }
-      }, 2000);
+      }, 1500);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start sensing');
+      setPhase(null);
     } finally {
       setBusy(false);
     }
@@ -111,7 +138,7 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
       const cancelled = await cancelSensingSession(sessionCreds.sessionId);
       setSnapshot(cancelled);
       setSessionCreds(null);
-      setRoomConnectHint(null);
+      setPhase(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to cancel');
     } finally {
@@ -124,7 +151,7 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
   useEffect(() => {
     if (Platform.OS !== 'ios' || !sessionCreds) return;
     void AudioSession.startAudioSession()
-      .then(() => setRoomConnectHint((h) => h ?? 'Audio session ready; publishing camera…'))
+      .then(() => setPhase((p) => p ?? 'Publishing front camera for Presage…'))
       .catch((e) => setError(e instanceof Error ? e.message : 'Audio session failed'));
     return () => {
       void AudioSession.stopAudioSession().catch(() => undefined);
@@ -136,25 +163,25 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
       <Panel>
         <Pill text="PERSON 2 · IOS ONLY" tone="orange" />
         <Text style={styles.title}>Camera sensing</Text>
-        <Text style={styles.body}>Presage + LiveKit sensing in this drop targets iOS development builds only.</Text>
+        <Text style={styles.body}>Presage + LiveKit sensing targets iOS builds only.</Text>
       </Panel>
     );
   }
 
   const pulse = snapshot?.pulse;
   const breathing = snapshot?.breathing;
+  const measuring = Boolean(sessionCreds);
 
   return (
     <Panel>
-      <Pill text="PERSON 2 · LIVEKIT (MOCK PRESAGE)" />
-      <Text style={styles.title}>iOS camera → LiveKit</Text>
+      <Pill text="PERSON 2 · PRESAGE" tone="blue" />
+      <Text style={styles.title}>Face scan for pulse & breathing</Text>
       <Text style={styles.body}>
-        Phase 2: publish your front camera into a LiveKit room so the worker can subscribe. Heart/breathing stay
-        unavailable until Phase 3 (Presage live).
+        Tap start, allow Camera, then hold still with your face centered and well lit for about 30–40 seconds.
       </Text>
 
-      {!sessionCreds ? (
-        <Action label={busy ? 'Starting…' : 'Start iOS sensing'} disabled={busy || !hasPresageWorker} onPress={start} />
+      {!measuring ? (
+        <Action label={busy ? 'Starting…' : 'Start camera sensing'} disabled={busy} onPress={start} />
       ) : (
         <>
           {sessionCreds.livekitUrl && sessionCreds.participantToken ? (
@@ -166,44 +193,30 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
               video={true}
               options={{
                 adaptiveStream: { pixelDensity: 'screen' },
+                publishDefaults: {
+                  videoEncoding: { maxBitrate: 1_700_000, maxFramerate: 30 },
+                },
                 videoCaptureDefaults: {
                   facingMode: 'user',
                   resolution: { width: 1280, height: 720, frameRate: 30 },
                 },
               }}
-              onConnected={() => {
-                setRoomConnectHint('Phone connected to LiveKit room (publishing camera).');
-                console.log('[sensing] phone LiveKitRoom connected', {
-                  roomName: sessionCreds.roomName,
-                  identity: sessionCreds.participantIdentity,
-                });
-              }}
-              onDisconnected={() => {
-                setRoomConnectHint('Phone disconnected from LiveKit room.');
-              }}
-              onError={(e: Error) => {
-                setError(e.message);
-                console.warn('[sensing] LiveKitRoom error', e.message);
-              }}
+              onConnected={() => setPhase('Camera live — keep your face in view')}
+              onDisconnected={() => setPhase('Disconnected from LiveKit room.')}
+              onError={(e: Error) => setError(e.message)}
             >
               <LocalPreview />
             </LiveKitRoom>
-          ) : (
-            <Text style={styles.hint}>Worker did not return LiveKit join credentials.</Text>
-          )}
+          ) : null}
 
-          <Text style={styles.meta}>Room: {sessionCreds.roomName}</Text>
-          <Text style={styles.meta}>You: {sessionCreds.participantIdentity}</Text>
           <Text style={styles.meta}>Status: {snapshot?.status ?? sessionCreds.status}</Text>
+          <Text style={styles.meta}>Worker: {snapshot?.workerConnected ? 'connected' : 'joining…'}</Text>
           <Text style={styles.meta}>
-            Worker in room: {snapshot?.workerConnected ? 'yes' : 'waiting…'}
+            Face video: {snapshot?.videoTrackSubscribed ? 'receiving' : 'waiting…'}
           </Text>
-          <Text style={styles.meta}>
-            Video subscribed: {snapshot?.videoTrackSubscribed ? 'yes' : 'waiting…'}
-          </Text>
-          <Text style={styles.meta}>Frames received by worker: {snapshot?.framesAccepted ?? 0}</Text>
-          {roomConnectHint ? <Text style={styles.hint}>{roomConnectHint}</Text> : null}
-          {snapshot?.validationHint ? <Text style={styles.hint}>{snapshot.validationHint}</Text> : null}
+          <Text style={styles.meta}>Frames: {snapshot?.framesAccepted ?? 0}</Text>
+          {getWorkerBaseUrl() ? <Text style={styles.tiny}>Worker: {getWorkerBaseUrl()}</Text> : null}
+          {phase ? <Text style={styles.hint}>{phase}</Text> : null}
 
           <View style={styles.stats}>
             <Text style={styles.stat}>
@@ -218,12 +231,17 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
         </>
       )}
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {!hasPresageWorker ? (
-        <Text style={styles.hint}>Set EXPO_PUBLIC_PRESAGE_WORKER_URL then rebuild the iOS dev client.</Text>
+      {phase && !measuring ? <Text style={styles.hint}>{phase}</Text> : null}
+      {error ? (
+        <View style={styles.errorBlock}>
+          <Text style={styles.error}>{error}</Text>
+          {/Camera permission/i.test(error) ? (
+            <Action label="Open Settings" secondary onPress={() => void Linking.openSettings()} />
+          ) : null}
+        </View>
       ) : null}
       <Text style={styles.disclaimer}>
-        Requires `npx expo run:ios` (not Expo Go). Wellness estimates only — not for diagnosis.
+        Uses the cloud Presage backend. Estimates only — not for diagnosis.
       </Text>
     </Panel>
   );
@@ -232,11 +250,31 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
 const styles = StyleSheet.create({
   title: { fontSize: 17, color: colors.ink, fontWeight: '800', marginTop: 12, marginBottom: 6 },
   body: { color: colors.muted, fontSize: 14, lineHeight: 21, marginBottom: 12 },
-  preview: { width: '100%', height: 220, borderRadius: 14, backgroundColor: '#0F1A17', marginBottom: 10 },
+  preview: { width: '100%', height: 320, borderRadius: 14, backgroundColor: '#0F1A17', marginBottom: 6 },
+  previewPlaceholder: {
+    width: '100%',
+    height: 320,
+    borderRadius: 14,
+    backgroundColor: '#0F1A17',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    marginBottom: 10,
+  },
+  previewPlaceholderText: { color: '#FFF', fontWeight: '800', marginBottom: 8 },
+  faceGuide: {
+    textAlign: 'center',
+    color: colors.green,
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 10,
+  },
   meta: { fontSize: 13, fontWeight: '700', color: colors.ink, marginBottom: 4 },
-  hint: { fontSize: 12, color: colors.muted, lineHeight: 18, marginBottom: 8 },
+  tiny: { fontSize: 10, color: colors.muted, marginBottom: 6 },
+  hint: { fontSize: 12, color: colors.muted, lineHeight: 18, marginBottom: 8, textAlign: 'center' },
   stats: { gap: 4, marginBottom: 12, marginTop: 8 },
   stat: { fontSize: 14, fontWeight: '700', color: colors.ink },
-  error: { color: colors.red, fontWeight: '700', marginTop: 10 },
+  errorBlock: { marginTop: 10, gap: 8 },
+  error: { color: colors.red, fontWeight: '700' },
   disclaimer: { fontSize: 11, color: colors.muted, lineHeight: 16, marginTop: 12 },
 });

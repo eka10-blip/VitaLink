@@ -103,9 +103,9 @@ app.get('/v1/measurements/latest', (req, res) => {
   });
 });
 
-app.listen(appConfig.port, () => {
+app.listen(appConfig.port, '0.0.0.0', () => {
   console.log(
-    `[presage-worker] listening on :${appConfig.port} mode=${appConfig.presageMode} livekit=${isLiveKitConfigured()}`,
+    `[presage-worker] listening on 0.0.0.0:${appConfig.port} mode=${appConfig.presageMode} livekit=${isLiveKitConfigured()}`,
   );
   void probeSdkPackages().then((packages) => {
     console.log(

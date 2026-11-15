@@ -40,7 +40,20 @@ Official docs:
 - LiveKit Expo (mobile client, later phases): https://docs.livekit.io/home/quickstarts/expo
 - LiveKit subscribe / frames: https://docs.livekit.io/transport/media/subscribe/
 
-## Setup (Phase 1)
+## Cloud deploy (phone on any Wi‑Fi, Mac/Cursor closed)
+
+The iOS app talks to a **public HTTPS** worker URL (`EXPO_PUBLIC_PRESAGE_WORKER_URL`). Local USB/LAN IPs are not used for device builds.
+
+```bash
+cd backend/presage-worker
+# one-time: railway login
+./scripts/deploy-railway.sh
+# then bake the printed HTTPS URL into mobile/.env and rebuild the iOS app
+```
+
+Dockerfile + `railway.toml` are included. Secrets stay in Railway variables (never commit `.env`).
+
+## Setup (Phase 1 — local only)
 
 ```bash
 cd backend/presage-worker

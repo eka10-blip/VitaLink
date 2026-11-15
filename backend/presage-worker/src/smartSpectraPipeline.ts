@@ -6,14 +6,15 @@ export type PipelineMetricsHandler = (update: {
   pulse: MetricReading;
   breathing: MetricReading;
   validationHint: string | null;
+  fatal?: boolean;
 }) => void;
 
 type SmartSpectraModule = typeof import('@smartspectra/node-sdk');
 
 /**
- * Wraps only documented @smartspectra/node-sdk APIs:
- * constructor options, useCustomInput, start, sendFrame, on('metrics'|'validationStatus'|'error'), stopAsync, destroy.
- * Loaded lazily so mock mode can boot without the native package.
+ * Wraps only documented @smartspectra/node-sdk APIs.
+ * Never lets FFI throws escape — that previously killed the whole Node process
+ * on Railway and wiped in-memory sessions ("Session not found").
  * @see https://smartspectra.presagetech.com/docs/nodejs
  */
 export class SmartSpectraPipeline {
@@ -22,8 +23,18 @@ export class SmartSpectraPipeline {
     null;
   private lastTimestampUs = 0;
   private startedAtMs = 0;
+  private fatal = false;
+  private fatalMessage: string | null = null;
 
   constructor(private readonly onUpdate: PipelineMetricsHandler) {}
+
+  isFatal(): boolean {
+    return this.fatal;
+  }
+
+  getFatalMessage(): string | null {
+    return this.fatalMessage;
+  }
 
   async start(): Promise<void> {
     if (appConfig.presageMode !== 'live') {
@@ -51,12 +62,19 @@ export class SmartSpectraPipeline {
 
     this.pixelFormatRgb = PixelFormat.kRGB;
 
+    // Pulse + breathing only — skip heavier models that may need GPU/Vulkan on cloud hosts.
+    const requestedMetrics = [...breathingMetrics, ...cardioMetrics].filter((name) => {
+      const n = String(name).toLowerCase();
+      return !n.includes('blood') && !n.includes('bp') && !n.includes('phasic');
+    });
+
     const sdk = new SmartSpectraSDK({
       apiKey: appConfig.smartSpectraApiKey,
-      requestedMetrics: [...breathingMetrics, ...cardioMetrics],
+      requestedMetrics: requestedMetrics.length > 0 ? requestedMetrics : [...breathingMetrics, ...cardioMetrics],
     });
 
     sdk.on('validationStatus', (_code: number, _ts: number, hint: string) => {
+      if (this.fatal) return;
       this.onUpdate({
         pulse: readingFromSample('bpm', null, null, new Date().toISOString()),
         breathing: readingFromSample('breaths/min', null, null, new Date().toISOString()),
@@ -65,28 +83,43 @@ export class SmartSpectraPipeline {
     });
 
     sdk.on('metrics', (buf: Buffer, _ts: number) => {
-      const metrics = decodeMetrics(buf) as {
-        breathing?: { rate?: Array<{ value: number; confidence?: number }> };
-        cardio?: { pulseRate?: Array<{ value: number; confidence?: number }> };
-      };
-      if (!metrics || Buffer.isBuffer(metrics)) return;
-      const now = new Date().toISOString();
-      const pulseSample = metrics.cardio?.pulseRate?.at(-1);
-      const breathSample = metrics.breathing?.rate?.at(-1);
-      this.onUpdate({
-        pulse: readingFromSample('bpm', pulseSample?.value, pulseSample?.confidence, now),
-        breathing: readingFromSample(
-          'breaths/min',
-          breathSample?.value,
-          breathSample?.confidence,
-          now,
-        ),
-        validationHint: null,
-      });
+      if (this.fatal) return;
+      try {
+        const metrics = decodeMetrics(buf) as {
+          breathing?: { rate?: Array<{ value: number; confidence?: number }> };
+          cardio?: { pulseRate?: Array<{ value: number; confidence?: number }> };
+        };
+        if (!metrics || Buffer.isBuffer(metrics)) return;
+        const now = new Date().toISOString();
+        const pulseSample = metrics.cardio?.pulseRate?.at(-1);
+        const breathSample = metrics.breathing?.rate?.at(-1);
+        this.onUpdate({
+          pulse: readingFromSample('bpm', pulseSample?.value, pulseSample?.confidence, now),
+          breathing: readingFromSample(
+            'breaths/min',
+            breathSample?.value,
+            breathSample?.confidence,
+            now,
+          ),
+          validationHint: null,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[smartspectra] metrics decode failed:', message);
+      }
     });
 
     sdk.on('error', (code: number, message: string, retryable: boolean) => {
       console.error(`[smartspectra] error code=${code} retryable=${retryable}: ${message}`);
+      if (!retryable) {
+        this.markFatal(message || `SmartSpectra error ${code}`);
+      } else {
+        this.onUpdate({
+          pulse: readingFromSample('bpm', null, null, new Date().toISOString()),
+          breathing: readingFromSample('breaths/min', null, null, new Date().toISOString()),
+          validationHint: `Presage recovering: ${message}`,
+        });
+      }
     });
 
     sdk.useCustomInput(FrameTransform.kNone);
@@ -94,10 +127,12 @@ export class SmartSpectraPipeline {
     this.sdk = sdk;
     this.startedAtMs = Date.now();
     this.lastTimestampUs = 0;
+    this.fatal = false;
+    this.fatalMessage = null;
   }
 
   sendRgbFrame(buffer: Uint8Array, width: number, height: number, timestampUs: number): boolean {
-    if (!this.sdk || this.pixelFormatRgb == null) return false;
+    if (this.fatal || !this.sdk || this.pixelFormatRgb == null) return false;
     if (timestampUs <= this.lastTimestampUs) {
       timestampUs = this.lastTimestampUs + 1;
     }
@@ -106,16 +141,22 @@ export class SmartSpectraPipeline {
       console.warn('[smartspectra] timestamp gap >2s; caller should stop/start session');
       return false;
     }
-    const ok = this.sdk.sendFrame(
-      Buffer.from(buffer),
-      width,
-      height,
-      width * 3,
-      this.pixelFormatRgb,
-      timestampUs,
-    );
-    if (ok) this.lastTimestampUs = timestampUs;
-    return ok;
+    try {
+      const ok = this.sdk.sendFrame(
+        Buffer.from(buffer),
+        width,
+        height,
+        width * 3,
+        this.pixelFormatRgb,
+        timestampUs,
+      );
+      if (ok) this.lastTimestampUs = timestampUs;
+      return ok;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.markFatal(message);
+      return false;
+    }
   }
 
   elapsedSeconds(): number {
@@ -127,7 +168,28 @@ export class SmartSpectraPipeline {
     if (!this.sdk) return;
     const sdk = this.sdk;
     this.sdk = null;
-    await sdk.stopAsync();
-    await sdk.destroy();
+    try {
+      await sdk.stopAsync();
+    } catch (err) {
+      console.warn('[smartspectra] stopAsync failed:', err instanceof Error ? err.message : err);
+    }
+    try {
+      await sdk.destroy();
+    } catch (err) {
+      console.warn('[smartspectra] destroy failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  private markFatal(message: string): void {
+    if (this.fatal) return;
+    this.fatal = true;
+    this.fatalMessage = message;
+    console.error(`[smartspectra] fatal — stopping frames: ${message}`);
+    this.onUpdate({
+      pulse: readingFromSample('bpm', null, null, new Date().toISOString()),
+      breathing: readingFromSample('breaths/min', null, null, new Date().toISOString()),
+      validationHint: `Presage stopped: ${message}. Tap Start again.`,
+      fatal: true,
+    });
   }
 }

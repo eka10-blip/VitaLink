@@ -2,11 +2,12 @@ import type { MetricQuality, MetricReading } from './types.js';
 
 /**
  * Map SmartSpectra sample confidence into the Person 4 contract quality enum.
- * Confidence stays 0 until windows fill (pulse ~12s, breathing ~30s per Presage docs).
+ * Confidence often stays 0 until windows fill (pulse ~12s, breathing ~30s).
+ * Still surface numeric values as "limited" so the UI can show progress.
  */
 export function qualityFromConfidence(confidence: number | null | undefined): MetricQuality {
   if (confidence == null || Number.isNaN(confidence) || confidence <= 0) {
-    return 'unavailable';
+    return 'limited';
   }
   if (confidence < 0.5) return 'limited';
   return 'good';
@@ -19,8 +20,7 @@ export function readingFromSample(
   measuredAt: string,
 ): MetricReading {
   const conf = confidence == null ? null : Number(confidence);
-  const quality = qualityFromConfidence(conf);
-  if (value == null || Number.isNaN(value) || quality === 'unavailable') {
+  if (value == null || Number.isNaN(Number(value))) {
     return {
       value: null,
       unit,
@@ -31,10 +31,10 @@ export function readingFromSample(
     };
   }
   return {
-    value: Math.round(value),
+    value: Math.round(Number(value)),
     unit,
     source: 'presage',
-    quality,
+    quality: qualityFromConfidence(conf),
     measuredAt,
     confidence: conf,
   };

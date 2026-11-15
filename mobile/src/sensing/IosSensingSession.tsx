@@ -119,7 +119,14 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
             onComplete?.(next);
           }
         } catch (e) {
-          setError(e instanceof Error ? e.message : 'Failed to poll sensing session');
+          const message = e instanceof Error ? e.message : 'Failed to poll sensing session';
+          if (/session not found/i.test(message)) {
+            stopPolling();
+            setError('Scan session ended on the cloud worker. Tap Start camera sensing again.');
+            setPhase(null);
+            return;
+          }
+          setError(message);
         }
       }, 1500);
     } catch (e) {

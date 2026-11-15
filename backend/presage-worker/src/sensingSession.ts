@@ -201,9 +201,20 @@ async function runLiveKitPipeline(
     pulse: ReturnType<typeof readingFromSample>;
     breathing: ReturnType<typeof readingFromSample>;
     validationHint: string | null;
+    fatal?: boolean;
   }) => {
     const current = getSession(sessionId);
     if (!current || current.status === 'cancelled' || current.status === 'failed') return;
+
+    if (update.fatal) {
+      setStatus(
+        sessionId,
+        'failed',
+        update.validationHint || pipeline?.getFatalMessage() || 'Presage pipeline failed',
+      );
+      controller.abort();
+      return;
+    }
 
     const next = updateSession(sessionId, {
       pulse: update.pulse.value != null ? update.pulse : current.pulse,
@@ -215,13 +226,20 @@ async function runLiveKitPipeline(
       status: current.status === 'waiting_for_video' ? 'measuring' : current.status,
     });
 
+    const elapsed = pipeline?.elapsedSeconds() ?? 0;
+    const hasPulse = next.pulse.value != null;
+    const hasBreathing = next.breathing.value != null;
     const ready =
-      next.pulse.quality !== 'unavailable' &&
-      next.breathing.quality !== 'unavailable' &&
-      (pipeline?.elapsedSeconds() ?? 0) >= appConfig.minMeasurementSeconds;
+      elapsed >= appConfig.minMeasurementSeconds && (hasPulse || hasBreathing);
 
     if (ready && next.status !== 'completed') {
-      const completed = setStatus(sessionId, 'completed');
+      const completed = updateSession(sessionId, {
+        status: 'completed',
+        validationHint:
+          hasPulse && hasBreathing
+            ? 'Measurement complete'
+            : 'Measurement window finished — some vitals may still be limited.',
+      });
       void forwardToPerson3(completed);
       controller.abort();
     }
@@ -314,7 +332,32 @@ async function runLiveKitPipeline(
     }
   }
 
+  // Soft deadline: finish with whatever vitals we have (breathing window ~30s+).
+  const softDeadlineMs = (appConfig.minMeasurementSeconds + 25) * 1000;
+  const deadlineTimer = setTimeout(() => {
+    const current = getSession(sessionId);
+    if (!current || current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
+      return;
+    }
+    if (current.pulse.value != null || current.breathing.value != null) {
+      const completed = updateSession(sessionId, {
+        status: 'completed',
+        validationHint: 'Measurement window finished.',
+      });
+      void forwardToPerson3(completed);
+      controller.abort();
+      return;
+    }
+    setStatus(
+      sessionId,
+      'failed',
+      'No pulse/breathing yet after the measurement window. Keep your face centered with good light, then try again.',
+    );
+    controller.abort();
+  }, softDeadlineMs);
+
   await waitUntilSettled(sessionId, signal);
+  clearTimeout(deadlineTimer);
   await cleanup();
 }
 
@@ -391,7 +434,29 @@ async function consumeVideo(
       }
 
       if (!pipeline) continue;
-      const accepted = pipeline.sendRgbFrame(frame.data, frame.width, frame.height, timestampUs);
+      if (pipeline.isFatal()) {
+        setStatus(sessionId, 'failed', pipeline.getFatalMessage() || 'Presage pipeline failed');
+        break;
+      }
+
+      // ~15 fps into Presage — steadier on CPU-only cloud hosts than full 30 fps.
+      if (session.framesAccepted % 2 === 1) {
+        continue;
+      }
+
+      let accepted = false;
+      try {
+        accepted = pipeline.sendRgbFrame(frame.data, frame.width, frame.height, timestampUs);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setStatus(sessionId, 'failed', `Presage sendFrame failed: ${message}`);
+        break;
+      }
+      if (pipeline.isFatal()) {
+        setStatus(sessionId, 'failed', pipeline.getFatalMessage() || 'Presage pipeline failed');
+        break;
+      }
+
       const nextAccepted = session.framesAccepted + (accepted ? 1 : 0);
       const nextRejected = session.framesRejected + (accepted ? 0 : 1);
       updateSession(sessionId, {
@@ -407,7 +472,15 @@ async function consumeVideo(
       }
     }
   } catch (err) {
-    if (!signal.aborted) throw err;
+    if (!signal.aborted) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[livekit session=${sessionId}] video loop error:`, message);
+      try {
+        setStatus(sessionId, 'failed', message);
+      } catch {
+        /* session may already be gone */
+      }
+    }
   }
 }
 

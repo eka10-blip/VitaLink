@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { appConfig } from './config.js';
 import {
   emptyMetric,
@@ -7,6 +9,36 @@ import {
 } from './types.js';
 
 const sessions = new Map<string, SensingSession>();
+
+const storePath =
+  process.env.SESSION_STORE_PATH?.trim() ||
+  join(process.env.TMPDIR || '/tmp', 'vitalink-presage-sessions.json');
+
+function persist(): void {
+  try {
+    mkdirSync(dirname(storePath), { recursive: true });
+    writeFileSync(storePath, JSON.stringify([...sessions.values()], null, 0), 'utf8');
+  } catch (err) {
+    console.warn('[sessions] persist failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+function restore(): void {
+  try {
+    if (!existsSync(storePath)) return;
+    const raw = readFileSync(storePath, 'utf8');
+    const list = JSON.parse(raw) as SensingSession[];
+    if (!Array.isArray(list)) return;
+    for (const session of list) {
+      if (session?.id) sessions.set(session.id, session);
+    }
+    console.log(`[sessions] restored ${sessions.size} from disk`);
+  } catch (err) {
+    console.warn('[sessions] restore failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+restore();
 
 export function createSession(patientId: string, roomName: string): SensingSession {
   const now = new Date().toISOString();
@@ -29,6 +61,7 @@ export function createSession(patientId: string, roomName: string): SensingSessi
     workerIdentity: null,
   };
   sessions.set(session.id, session);
+  persist();
   return session;
 }
 
@@ -52,6 +85,7 @@ export function updateSession(
     updatedAt: new Date().toISOString(),
   };
   sessions.set(id, next);
+  persist();
   return next;
 }
 

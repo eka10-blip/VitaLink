@@ -1,0 +1,32 @@
+{
+  "name": "vitalink-presage-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Person 2 — LiveKit video subscriber + Presage SmartSpectra vitals worker (iOS camera publish path)",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.18",
+    "@smartspectra/node-sdk": "^3.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "livekit-server-sdk": "^2.13.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

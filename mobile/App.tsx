@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert as NativeAlert, Linking, Platform, Pressable, 
 import { Dashboard, Role, Alert as CareAlert, Metric } from './src/models';
 import { demoRepository } from './src/demoRepository';
 import { fetchLiveRole, hasLiveUrl, liveRepository } from './src/liveRepository';
+import { IosSensingGate } from './src/sensing/IosSensingGate';
 import { Action, Empty, Label, MetricCard, Panel, Pill, SectionHeader } from './src/ui';
 import { colors } from './src/theme';
 
@@ -75,7 +76,8 @@ function PatientHome({ data, onCheckIn, onCallAI }: { data: Dashboard; onCheckIn
 function PatientCheckIn({ data, onCheckIn, onSimulate, onCallAI, busy }: { data: Dashboard; onCheckIn: () => void; onSimulate: () => void; onCallAI: () => void; busy: boolean }) {
   return <>
     <Text style={styles.screenTitle}>Daily check-in</Text><Text style={styles.screenSub}>A simple process, with you in control.</Text>
-    <Panel><Pill text="STEP 1" /><Text style={styles.cardTitle}>Camera measurements</Text><Text style={styles.body}>Your teammate's Presage + LiveKit system will provide heart and breathing estimates. The interface displays only returned measurements and their status.</Text><View style={styles.statLine}><Text style={styles.statLabel}>Heart rate</Text><Text style={styles.statValue}>{metricText(data.pulse)} bpm</Text></View><View style={styles.statLine}><Text style={styles.statLabel}>Breathing rate</Text><Text style={styles.statValue}>{metricText(data.breathing)} /min</Text></View></Panel>
+    <Panel><Pill text="STEP 1" /><Text style={styles.cardTitle}>Camera measurements</Text><Text style={styles.body}>Person 2's Presage + LiveKit worker estimates heart and breathing from the iOS camera stream. Values appear below when the sensing session completes.</Text><View style={styles.statLine}><Text style={styles.statLabel}>Heart rate</Text><Text style={styles.statValue}>{metricText(data.pulse)} bpm</Text></View><View style={styles.statLine}><Text style={styles.statLabel}>Breathing rate</Text><Text style={styles.statValue}>{metricText(data.breathing)} /min</Text></View></Panel>
+    <IosSensingGate patientId={data.patientId} />
     <Panel><Pill text="STEP 2" tone="blue" /><Text style={styles.cardTitle}>FaceTime conversation</Text><Text style={styles.body}>Call the Chert AI caregiver using Apple's FaceTime app. When the agent is running, it can respond through the FaceTime bridge. Calls and transcripts are managed by the teammate's backend, not this screen.</Text><Action label="Call VitaLink AI on FaceTime  →" onPress={onCallAI} /><Text style={styles.microcopy}>Calls {CHERT_DISPLAY_NUMBER} through FaceTime. This button does not itself record a check-in or generate a report.</Text></Panel>
     <Panel><Pill text="STEP 3" /><Text style={styles.cardTitle}>Shared update</Text><Text style={styles.body}>Gemini + Supabase will generate the patient-friendly and caregiver summaries. Both appear in their respective Reports tabs.</Text><Action label={busy ? 'Saving…' : isDemo ? 'Complete sample check-in' : 'Request live check-in'} disabled={busy} onPress={onCheckIn} /></Panel>
     {isDemo ? <Panel style={{ borderColor: '#F9D8CF' }}><Text style={styles.cardTitle}>Emergency-flow demonstration</Text><Text style={styles.body}>Trigger an explicitly simulated nonresponse event to show how it appears on the family dashboard.</Text><Action label="Simulate no-response alert" danger disabled={busy} onPress={onSimulate} /></Panel> : null}

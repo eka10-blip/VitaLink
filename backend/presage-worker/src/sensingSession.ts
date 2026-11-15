@@ -439,11 +439,6 @@ async function consumeVideo(
         break;
       }
 
-      // ~15 fps into Presage — steadier on CPU-only cloud hosts than full 30 fps.
-      if (session.framesAccepted % 2 === 1) {
-        continue;
-      }
-
       let accepted = false;
       try {
         accepted = pipeline.sendRgbFrame(frame.data, frame.width, frame.height, timestampUs);

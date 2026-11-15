@@ -21,6 +21,7 @@ app.get('/health', (_req, res) => {
     service: 'vitalink-presage-worker',
     person: 2,
     platformFocus: 'ios',
+    workerRevision: 'cloud-stable-v7',
     // Non-secret mode label (mock|live) — not a credential
     presageMode: appConfig.presageMode,
     nodeVersionSupported: isNodeVersionSupported(),
@@ -101,6 +102,14 @@ app.get('/v1/measurements/latest', (req, res) => {
     platform: 'ios',
     source: 'presage',
   });
+});
+
+// Keep HTTP up even if a native SDK callback misbehaves — sessions are disk-backed.
+process.on('uncaughtException', (err) => {
+  console.error('[presage-worker] uncaughtException (kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[presage-worker] unhandledRejection (kept alive):', reason);
 });
 
 app.listen(appConfig.port, '0.0.0.0', () => {

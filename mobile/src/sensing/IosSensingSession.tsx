@@ -108,18 +108,35 @@ export function IosSensingSession({ patientId, onComplete }: Props) {
       setPhase('Opening camera and connecting to LiveKit…');
 
       stopPolling();
+      let transientErrors = 0;
+      setPhase('Hold still ~45 seconds — pulse first, then breathing…');
       pollRef.current = setInterval(async () => {
         try {
           const next = await getSensingSession(started.sessionId);
+          transientErrors = 0;
           setSnapshot(next);
           if (next.error) setError(next.error);
+          else setError(null);
           if (next.validationHint) setPhase(next.validationHint);
           if (next.status === 'completed' || next.status === 'failed' || next.status === 'cancelled') {
             stopPolling();
             onComplete?.(next);
           }
         } catch (e) {
-          setError(e instanceof Error ? e.message : 'Failed to poll sensing session');
+          const message = e instanceof Error ? e.message : 'Failed to poll sensing session';
+          // Brief Railway blips (502) during heavy Presage work — keep scanning.
+          if (/502|503|504|network|failed to fetch|timeout|abort/i.test(message)) {
+            transientErrors += 1;
+            setPhase('Worker busy measuring — keep your face in frame…');
+            if (transientErrors < 8) return;
+          }
+          if (/session not found/i.test(message)) {
+            stopPolling();
+            setError('Scan session ended on the cloud worker. Tap Start camera sensing again.');
+            setPhase(null);
+            return;
+          }
+          setError(message);
         }
       }, 1500);
     } catch (e) {

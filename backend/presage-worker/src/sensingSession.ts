@@ -227,7 +227,7 @@ async function runLiveKitPipeline(
     }
   };
 
-  // Phase 2: keep PRESAGE_MODE=mock — do not start SmartSpectra here.
+  // Phase 3+: start SmartSpectra only in live mode (requires SMARTSPECTRA_API_KEY).
   if (appConfig.presageMode === 'live') {
     pipeline = new SmartSpectraPipeline(onMetrics);
     await pipeline.start();

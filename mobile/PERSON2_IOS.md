@@ -1,9 +1,10 @@
 # Person 2 — iOS LiveKit + Presage sensing
 
-## Phase 2 (LiveKit connection)
+## Camera sensing (LiveKit + Presage)
 
-Goal: iPhone publishes camera → LiveKit room → worker joins and receives frames.  
-`PRESAGE_MODE` stays **`mock`** (no real vitals yet).
+Goal: iPhone asks for camera permission, publishes front camera → LiveKit room → worker runs Presage and returns pulse/breathing.
+
+For real vitals set worker `PRESAGE_MODE=live` and `SMARTSPECTRA_API_KEY`. Use `mock` only for LiveKit frame tests without Presage.
 
 ### Distinguish two successes
 
@@ -16,30 +17,19 @@ Phase 2 is **fully** complete only when **B** is proven on a real device.
 
 ### Prerequisites
 
-1. Worker `.env` has real `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-2. `PRESAGE_MODE=mock`
-3. Worker running: `cd backend/presage-worker && npm run start`
-4. Mac and iPhone on the **same Wi‑Fi**
-
-### Find your Mac’s LAN IP
-
-On your Mac Terminal:
-
-```bash
-ipconfig getifaddr en0
-```
-
-Example result: `192.168.1.42` (yours will differ).
+1. Cloud worker deployed (Railway): `backend/presage-worker/scripts/deploy-railway.sh`
+2. Worker env has real `LIVEKIT_*` + `SMARTSPECTRA_API_KEY`, `PRESAGE_MODE=live`
+3. Phone on **any** Wi‑Fi / cellular — Mac and USB are **not** required
 
 ### Mobile env
 
 In `mobile/.env` (create from `.env.example` if needed):
 
 ```bash
-EXPO_PUBLIC_PRESAGE_WORKER_URL=http://YOUR_MAC_LAN_IP:8787
+EXPO_PUBLIC_PRESAGE_WORKER_URL=https://YOUR-SERVICE.up.railway.app
 ```
 
-Use the IP from the previous step — **not** `localhost` on a physical iPhone.
+Must be the public **HTTPS** worker URL from Railway (not localhost / LAN / USB IPs). Rebuild the iOS app after changing this.
 
 ### Run the iOS app (dev build — not Expo Go)
 
